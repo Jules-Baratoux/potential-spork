@@ -1,0 +1,99 @@
+name: Deploy Flet app to GitHub Pages
+
+on:
+  push:
+    branches: [ "gh-pages" ]
+
+env:
+  FLET_IMAGE: &flet_image ghcr.io/${{ github.repository }}-flet:latest
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  packages: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+
+  image:
+    name: Push Flet image to GitHub
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Dockerfile
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: Dockerfile
+
+      - name: Check if Dockerfile has changed on branch
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: ${{ github.event.before }}  # Look for changes in the current push
+          filters: |
+            dockerfile:
+              - Dockerfile
+
+      - name: Login to GitHub Container Registry
+        if: &dockerfile_changed
+          steps.filter.outputs.dockerfile == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GitHub Container Registry
+        if: *dockerfile_changed
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ${{ env.FLET_IMAGE }}
+          cache-from: type=registry,ref=${{ env.FLET_IMAGE }}
+          cache-to: type=inline
+
+  artifact:
+    name: Publish app to GitHub Pages
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+    needs: image
+    container:
+      image: *flet_image
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout src
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: src
+
+      - name: Build dist
+        run:
+          flet publish
+          --route-url-strategy hash
+          --base-url ${{ github.event.repository.name }}
+          --distpath ../dist
+          src
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
